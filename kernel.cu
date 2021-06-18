@@ -320,7 +320,7 @@ __host__ int main(int argc, char* argv[])
 	double learning_rate = 7.0;
 	int batch_size = BATCH_SIZE;
 
-	std::string path = "C:\\Users\\mihai\\Desktop\\progy\\C & C++\\Digits_Identifier\\Data";
+	std::string path = "Data";
 	std::string digits = "\\train-images.idx3-ubyte";
 	std::string labels = "\\train_labels.txt";
 	
@@ -416,7 +416,7 @@ __host__ int main(int argc, char* argv[])
 	check_cuda_errors(cudaFree(device_weights), "MemFree failed. ");
 	check_cuda_errors(cudaFree(device_biases), "MemFree failed. ");
 
-	save_weights(layers_weights, layers_biases, layers, layer_count, "C:\\Users\\mihai\\Desktop\\progy\\C & C++\\Network\\Network\\Cuda_Learned_Net");
+	save_weights(layers_weights, layers_biases, layers, layer_count, "Cuda_Learned_Net");
 	checkpoint(5); /// ~~~ error_point
 
 	// Releasing host memory
