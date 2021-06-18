@@ -1,4 +1,4 @@
-﻿
+
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -13,7 +13,7 @@
 #include <chrono>
 
 #define DEVICE 0
-#define MAX_THREADS 5'400
+#define MAX_THREADS 6'000
 
 #define RAND_CONST_1 61746235
 #define RAND_CONST_2 18234565
@@ -212,9 +212,9 @@ __host__ void save_weights(double* weights, double* biases, int* layers, int lay
 	}
 }
 
-#define SAMPLE_ID(a, b) (((RAND_CONST_1 * a + RAND_CONST_2)*(RAND_CONST_3 + b)) % SAMPLE_NUM)
+#define SAMPLE_ID(a, b, seed) (((RAND_CONST_1 * a + RAND_CONST_2 + seed)*(RAND_CONST_3 + b)) % SAMPLE_NUM)
 
-__global__ void learn_kernel(double* train_inp, double* train_out, double* weights, double* biases, int* layers, int layer_num, double learning_rate)
+__global__ void learn_kernel(double* train_inp, double* train_out, double* weights, double* biases, int* layers, int layer_num, double learning_rate, int seed)
 {
 	__shared__ float a_buffer[BATCH_SIZE * TOTAL_NEURONS];
 	__shared__ float z_buffer[BATCH_SIZE * TOTAL_NEURONS];
@@ -228,7 +228,7 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	for (j = 0; j < layers[0]; ++j)
 	{
 		tmp_val = 0.0;
-		for (i = 0; i < layers[1]; ++i) tmp_val += weights[layers[1]*j+i]*train_inp[784* SAMPLE_ID(threadIdx.x, blockIdx.x) +i];
+		for (i = 0; i < layers[1]; ++i) tmp_val += weights[layers[1]*j+i]*train_inp[784* SAMPLE_ID(threadIdx.x, blockIdx.x, seed) +i];
 		z_buffer[TOTAL_NEURONS * threadIdx.x + j] = tmp_val + biases[j];
 		a_buffer[TOTAL_NEURONS * threadIdx.x + j] = SIGMOID(z_buffer[TOTAL_NEURONS * threadIdx.x + j]);
 	}
@@ -253,7 +253,7 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	for (i = 0; i < layer_num - 1; ++i) layer_shift += layers[2 * i];
 	for (j = 0; j < 10; ++j)
 	{
-		d_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j] = (a_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j]-train_out[10* SAMPLE_ID(threadIdx.x, blockIdx.x) +j])*D_SIGMOID(z_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j]);
+		d_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j] = (a_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j]-train_out[10* SAMPLE_ID(threadIdx.x, blockIdx.x, seed) +j])*D_SIGMOID(z_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j]);
 	}
 	layer_shift = 0; layer_shift_ = 0; weights_shift = 0;
 	
@@ -283,7 +283,7 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	{
 		for (j = 0; j < layers[1]; ++j)
 		{
-			weights[i * layers[1] + j] -= (learning_rate / BATCH_SIZE) * d_buffer[TOTAL_NEURONS * threadIdx.x + i] * train_inp[28 * 28 * SAMPLE_ID(threadIdx.x, blockIdx.x) + j];
+			weights[i * layers[1] + j] -= (learning_rate / BATCH_SIZE) * d_buffer[TOTAL_NEURONS * threadIdx.x + i] * train_inp[28 * 28 * SAMPLE_ID(threadIdx.x, blockIdx.x, seed) + j];
 		}
 	}
 	for (l = 1; l < layer_num; ++l)
@@ -316,7 +316,7 @@ __host__ int main(int argc, char* argv[])
 	check_device_properties();
 	
 	size_t sample_count = SAMPLE_NUM;
-    	size_t digit_shape = 28 * 28;
+    size_t digit_shape = 28 * 28;
 	double learning_rate = 7.0;
 	int batch_size = BATCH_SIZE;
 
@@ -392,7 +392,7 @@ __host__ int main(int argc, char* argv[])
 	T.start();
 	/// ==========================================================================================================================
 	// double* train_inp, double* train_out, double* weights, double* biases, int* layers, int layer_num, double learning_rate
-	learn_kernel <<<grid_dim, block_dim>>> (device_train_inp, device_train_out, device_weights, device_biases, device_layers, layer_count, learning_rate);
+	learn_kernel <<<grid_dim, block_dim>>> (device_train_inp, device_train_out, device_weights, device_biases, device_layers, layer_count, learning_rate, 0);
 	cudaThreadSynchronize();
 	/// ==========================================================================================================================
 	T.check(" Kernel taken: ");
