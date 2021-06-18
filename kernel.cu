@@ -316,7 +316,7 @@ __host__ int main(int argc, char* argv[])
 	check_device_properties();
 	
 	size_t sample_count = SAMPLE_NUM;
-    size_t digit_shape = 28 * 28;
+    	size_t digit_shape = 28 * 28;
 	double learning_rate = 7.0;
 	int batch_size = BATCH_SIZE;
 
