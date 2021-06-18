@@ -214,7 +214,7 @@ __host__ void save_weights(double* weights, double* biases, int* layers, int lay
 
 #define SAMPLE_ID(a, b, seed) (((RAND_CONST_1 * a + RAND_CONST_2 + seed)*(RAND_CONST_3 + b)) % SAMPLE_NUM)
 
-__global__ void learn_kernel(double* train_inp, double* train_out, double* weights, double* biases, int* layers, int layer_num, double learning_rate, int seed)
+__global__ void learn_kernel(double* train_inp, double* train_out, double* weights, double* biases, int* layers, int* shifts, int layer_num, double learning_rate, int seed)
 {
 	__shared__ float a_buffer[BATCH_SIZE * TOTAL_NEURONS];
 	__shared__ float z_buffer[BATCH_SIZE * TOTAL_NEURONS];
@@ -223,7 +223,6 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	float tmp_val;
 
 	// 1. Feeding input forward through net to gain weighted sums and activations
-
 	// A. First layer getting perception from input
 	for (j = 0; j < layers[0]; ++j)
 	{
@@ -235,7 +234,8 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	// B. Other layers:
 	for (l = 1; l < layer_num; ++l)
 	{
-		for (i = 0; i < l; ++i) layer_shift += layers[2 * i], weights_shift += layers[2 * i] * layers[2 * i + 1];
+		layer_shift = shifts[l];
+		for (i = 0; i < l; ++i) weights_shift += layers[2 * i] * layers[2 * i + 1];
 		//for (i = 0; i < l - 1; ++i) layer_shift_ += layers[2 * i];
 		layer_shift_ = layer_shift - layers[2 * (i-1)];
 		for (j = 0; j < layers[2 * l]; ++j)
@@ -250,7 +250,7 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 
 
 	// 2. Calculating Lastlayer delta:
-	for (i = 0; i < layer_num - 1; ++i) layer_shift += layers[2 * i];
+	layer_shift = shifts[layer_num - 1]; /// ~~!!
 	for (j = 0; j < 10; ++j)
 	{
 		d_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j] = (a_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j]-train_out[10* SAMPLE_ID(threadIdx.x, blockIdx.x, seed) +j])*D_SIGMOID(z_buffer[TOTAL_NEURONS*threadIdx.x+layer_shift+j]);
@@ -260,8 +260,8 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	// 3. Backpropagating error through layers:
 	for (l = layer_num - 2; l >= 0; --l)
 	{
-		//for (i = 0; i < l; ++i) layer_shift += layers[2 * i];
-		for (i = 0; i < l + 1; ++i) layer_shift_ += layers[2 * i], weights_shift += layers[2 * i] * layers[2 * i + 1];
+		for (i = 0; i < l + 1; ++i) weights_shift += layers[2 * i] * layers[2 * i + 1];
+		layer_shift_ = shifts[l + 1];
 		layer_shift = layer_shift_ - layers[2 * (i - 1)];
 		for (j = 0; j < layers[2 * l]; ++j)
 		{
@@ -288,8 +288,8 @@ __global__ void learn_kernel(double* train_inp, double* train_out, double* weigh
 	}
 	for (l = 1; l < layer_num; ++l)
 	{
-		//for (i = 0; i < l - 1; ++i) layer_shift_ += layers[2 * i];
-		for (i = 0; i < l; ++i) layer_shift += layers[2 * i], weights_shift += layers[2 * i] * layers[2 * i + 1];
+		for (i = 0; i < l; ++i) weights_shift += layers[2 * i] * layers[2 * i + 1];
+		layer_shift = shifts[l];
 		layer_shift_ = layer_shift - layers[2 * (i-1)];
 		// A. Biases
 		for (j = 0; j < layers[2 * l]; ++j)
@@ -320,7 +320,7 @@ __host__ int main(int argc, char* argv[])
 	double learning_rate = 7.0;
 	int batch_size = BATCH_SIZE;
 
-	std::string path = "Data";
+	std::string path = "C:\\Users\\mihai\\Desktop\\progy\\C & C++\\Digits_Identifier\\Data";
 	std::string digits = "\\train-images.idx3-ubyte";
 	std::string labels = "\\train_labels.txt";
 	
@@ -329,12 +329,17 @@ __host__ int main(int argc, char* argv[])
 	double* layers_weights;
 	double* layers_biases;
 	int* layers;
+	int* host_shifts;
 	
 	size_t layer_count = 2;
 	layers = new int[layer_count * 2];
+	host_shifts = new int[layer_count];
 	size_t total_weights = 0;
 	size_t total_neurons = 0;
+	// ==============================================================
 	layers[0] = 100; layers[1] = 784; layers[2] = 10; layers[3] = 100;
+	host_shifts[0] = 0; host_shifts[1] = 100;  
+	// ==============================================================
 
 	for (size_t layer = 0; layer < layer_count; ++layer)
 	{
@@ -365,8 +370,10 @@ __host__ int main(int argc, char* argv[])
 	double* device_weights;
 	double* device_biases;
 	int* device_layers;
+	int* device_shifts;
 
-	check_cuda_errors(cudaMalloc(&device_layers, 2*layer_count * sizeof(int)), "MemAlloc failed.");
+	check_cuda_errors(cudaMalloc(&device_shifts, layer_count * sizeof(int)), "MemAlloc failed.");
+	check_cuda_errors(cudaMalloc(&device_layers, 2 * layer_count * sizeof(int)), "MemAlloc failed.");
 	check_cuda_errors(cudaMalloc(&device_train_inp, sample_count * digit_shape * sizeof(double)), "MemAlloc failed. ");
 	check_cuda_errors(cudaMalloc(&device_train_out, sample_count * 10 * sizeof(double)), "MemAlloc failed. ");
 	check_cuda_errors(cudaMalloc(&device_weights, total_weights * sizeof(double)), "MemAlloc failed. ");
@@ -379,6 +386,7 @@ __host__ int main(int argc, char* argv[])
 	cudaMemcpyKind DTH = cudaMemcpyDeviceToHost;
 
 	T.start();
+	check_cuda_errors(cudaMemcpy(device_shifts, host_shifts, layer_count * sizeof(int), HTD), "MemCopy failed.", device_shifts);
 	check_cuda_errors(cudaMemcpy(device_layers, layers, 2 * layer_count * sizeof(int), HTD), "MemCopy failed.", device_layers);
 	check_cuda_errors(cudaMemcpy(device_train_inp, train_input, sample_count * digit_shape * sizeof(double), HTD), "MemCopy failed. ", device_train_inp);
 	check_cuda_errors(cudaMemcpy(device_train_out, train_output, sample_count * 10 * sizeof(double), HTD), "MemCopy failed. ", device_train_out);
@@ -391,8 +399,7 @@ __host__ int main(int argc, char* argv[])
 	// Initializing random states and invoking kernel
 	T.start();
 	/// ==========================================================================================================================
-	// double* train_inp, double* train_out, double* weights, double* biases, int* layers, int layer_num, double learning_rate
-	learn_kernel <<<grid_dim, block_dim>>> (device_train_inp, device_train_out, device_weights, device_biases, device_layers, layer_count, learning_rate, 0);
+	learn_kernel <<<grid_dim, block_dim>>> (device_train_inp, device_train_out, device_weights, device_biases, device_layers, device_shifts, layer_count, learning_rate, 0);
 	cudaThreadSynchronize();
 	/// ==========================================================================================================================
 	T.check(" Kernel taken: ");
@@ -401,8 +408,6 @@ __host__ int main(int argc, char* argv[])
 
 	// Transfering data from GPU device
 	T.start();
-	check_cuda_errors(cudaMemcpy(train_input, device_train_inp, sample_count * digit_shape * sizeof(double), DTH), "MemCopy failed. ", device_train_inp);
-	check_cuda_errors(cudaMemcpy(train_output, device_train_out, sample_count * 10 * sizeof(double), DTH), "MemCopy failed. ", device_train_out);
 	check_cuda_errors(cudaMemcpy(layers_weights, device_weights, total_weights * sizeof(double), DTH), "MemCopy failed. ", device_weights);
 	check_cuda_errors(cudaMemcpy(layers_biases, device_biases, total_neurons * sizeof(double), DTH), "MemCopy failed. ", device_biases);
 	T.check(" Memcopy-2 taken: ");
@@ -410,13 +415,14 @@ __host__ int main(int argc, char* argv[])
 	checkpoint(4); /// ~~~ error_point
 
 	// Releasing device memory
+	check_cuda_errors(cudaFree(device_shifts), "MemFree failed.");
 	check_cuda_errors(cudaFree(device_layers), "MemFree failed.");
 	check_cuda_errors(cudaFree(device_train_inp), "MemFree failed. ");
 	check_cuda_errors(cudaFree(device_train_out), "MemFree failed. ");
 	check_cuda_errors(cudaFree(device_weights), "MemFree failed. ");
 	check_cuda_errors(cudaFree(device_biases), "MemFree failed. ");
 
-	save_weights(layers_weights, layers_biases, layers, layer_count, "Cuda_Learned_Net");
+	save_weights(layers_weights, layers_biases, layers, layer_count, "C:\\Users\\mihai\\Desktop\\progy\\C & C++\\Network\\Network\\Cuda_Learned_Net");
 	checkpoint(5); /// ~~~ error_point
 
 	// Releasing host memory
@@ -425,6 +431,7 @@ __host__ int main(int argc, char* argv[])
 	delete[] train_input;
 	delete[] layers;
 	delete[] train_output;
+	delete[] host_shifts;
 
 	return 0;
 }
